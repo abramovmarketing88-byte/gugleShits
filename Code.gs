@@ -43,22 +43,21 @@ function menuHighlightColumns() {
   SpreadsheetApp.getActiveSpreadsheet().toast('Колонки A–K: заголовок выделен. Заполняйте A–E и запускайте Run JTBD Analysis.', 'Audience Analysis', 4);
 }
 
-// --- Run JTBD Analysis ---
+// --- Run JTBD Analysis (вся логика здесь, без проверки «подключён ли») ---
 
 function menuRunJtbdAnalysis() {
   runJtbdAnalysis();
 }
 
 /**
- * Читает данные из колонок A–E (активная строка или выделение), вызывает OpenRouter с JTBD-промптами,
- * разбирает ответ по разделам ### и пишет в F–K.
+ * Читает A–E (активная строка или выделение), вызывает OpenRouter с JTBD-промптами, пишет результат в F–K.
  */
 function runJtbdAnalysis() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getActiveSheet();
   var settings = getStoredApiSettings();
   if (!settings.apiKey) {
-    ss.toast('Сначала откройте Audience Analysis → Setup API Key & Model и сохраните API ключ.', 'JTBD Analysis', 6);
+    ss.toast('Сначала: Audience Analysis → Setup API Key & Model → вставьте ключ → Save Settings.', 'JTBD Analysis', 6);
     return;
   }
 
@@ -70,7 +69,7 @@ function runJtbdAnalysis() {
   } else {
     var row = sheet.getActiveCell().getRow();
     if (row < 2) {
-      ss.toast('Выделите строку со 2-й по последнюю с данными в A–E.', 'JTBD Analysis', 4);
+      ss.toast('Выделите строку с данными (со 2-й) или одну ячейку в ней.', 'JTBD Analysis', 4);
       return;
     }
     startRow = row;
@@ -95,7 +94,7 @@ function runJtbdAnalysis() {
     var systemPrompt = typeof JTBD_SYSTEM_PROMPT !== 'undefined' ? JTBD_SYSTEM_PROMPT : 'Ты — эксперт по JTBD. Отвечай на русском по разделам с ###.';
     var responseText = callOpenRouterChat_(settings.apiKey, settings.model, systemPrompt, userContent);
     if (responseText === null) {
-      ss.toast('Ошибка вызова API. Проверьте ключ и модель.', 'JTBD Analysis', 5);
+      ss.toast('Ошибка API. Проверьте ключ и модель в Setup API Key & Model.', 'JTBD Analysis', 5);
       return;
     }
     var sections = parseJtbdSections_(responseText);
@@ -103,11 +102,11 @@ function runJtbdAnalysis() {
       sheet.getRange(rowIndex, 6 + col).setValue(sections[col]);
     }
   }
-  ss.toast('JTBD Analysis выполнен: ' + numRows + ' стр. Результат в F–K.', 'Audience Analysis', 4);
+  ss.toast('Готово: ' + numRows + ' стр. Результат в колонках F–K.', 'Audience Analysis', 4);
 }
 
 function buildJtbdUserPrompt(a, b, c, d, e) {
-  var t = typeof JTBD_USER_TEMPLATE !== 'undefined' ? JTBD_USER_TEMPLATE : 'Продукт: {{A}}\nСегмент/контекст: {{B}}\nЖелаемый результат: {{C}}\nБоли: {{D}}\nАльтернативы: {{E}}\n\nСоздай JTBD-анализ по разделам ###.';
+  var t = typeof JTBD_USER_TEMPLATE !== 'undefined' ? JTBD_USER_TEMPLATE : 'Продукт: {{A}}\nСегмент: {{B}}\nРезультат: {{C}}\nБоли: {{D}}\nАльтернативы: {{E}}\n\nСоздай JTBD-анализ по разделам ###.';
   return t
     .replace(/\{\{A\}\}/g, String(a || ''))
     .replace(/\{\{B\}\}/g, String(b || ''))
@@ -116,9 +115,6 @@ function buildJtbdUserPrompt(a, b, c, d, e) {
     .replace(/\{\{E\}\}/g, String(e || ''));
 }
 
-/**
- * Парсит ответ модели: блоки ### Заголовок → текст. Возвращает массив из 6 строк для колонок F–K.
- */
 function parseJtbdSections_(text) {
   var keys = typeof JTBD_SECTION_KEYS !== 'undefined' ? JTBD_SECTION_KEYS : [
     'Сегмент ЦА (целевая аудитория)',
@@ -146,9 +142,6 @@ function parseJtbdSections_(text) {
   return result;
 }
 
-/**
- * Вызов OpenRouter API. Возвращает content ответа или null при ошибке.
- */
 function callOpenRouterChat_(apiKey, model, systemPrompt, userContent) {
   var url = 'https://openrouter.ai/api/v1/chat/completions';
   var payload = {

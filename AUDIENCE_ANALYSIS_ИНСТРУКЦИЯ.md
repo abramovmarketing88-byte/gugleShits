@@ -4,6 +4,22 @@
 
 ---
 
+## Какие файлы из папки куда загружать
+
+В папке **gugleShits** лежат файлы **двух разных дополнений**. В один проект Apps Script загружаете только файлы **одного** дополнения.
+
+| Файл в папке | Куда загружать |
+|--------------|----------------|
+| **Code.gs** | Проект **Audience Analysis** (меню JTBD + сайдбар OpenRouter) |
+| **Sidebar.html** | Тот же проект Audience Analysis |
+| **JtbdPromptsLibrary.gs** | Тот же проект Audience Analysis |
+| **main.gs**, **utils.gs**, **prompts.gs**, **openrouter.gs**, **CopyHtmlDialog.html** | Другой проект — **Avito AI** (генерация объявлений). Инструкция: **DEPLOY.md** |
+| **README.md**, **DEPLOY.md**, **AUDIENCE_ANALYSIS_ИНСТРУКЦИЯ.md** | Никуда не загружать — это инструкции, их читают на компьютере |
+
+**Итого:** для **Audience Analysis** в Apps Script нужны только **3 файла**: Code.gs, Sidebar.html, JtbdPromptsLibrary.gs. Остальные .gs и .html — для Avito AI или просто текст инструкций.
+
+---
+
 ## Что нужно в проекте Apps Script (3 файла)
 
 В **одной** Google Таблице: **Расширения** → **Apps Script**. В проекте должны быть **ровно эти файлы** (лишние старые можно удалить):
