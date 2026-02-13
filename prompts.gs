@@ -1,154 +1,203 @@
-function stepImprove_(settings, data) {
-  const prompt = buildImprovePrompt_(data);
-  const res = callOpenRouter_(
-    settings.OPENROUTER_API_KEY,
-    settings.MODEL_IMPROVE,
-    prompt,
-    settings.TEMPERATURE_IMPROVE
-  );
-  if (!res.ok) {
-    throw res.error;
-  }
+// --- OfferWriter: строгий JSON — title_variants, offer_text, bullets, guarantees, cta, warnings ---
 
-  const parsed = safeJsonParse_(res.content);
-  validateKeys_(parsed, ['title', 'improved_text', 'bullets']);
+var OFFER_WRITER_REQUIRED_KEYS = ['title_variants', 'offer_text', 'bullets', 'guarantees', 'cta', 'warnings'];
 
-  return {
-    title: parsed.title,
-    text: parsed.improved_text,
-    bullets: Array.isArray(parsed.bullets) ? parsed.bullets.join(' • ') : String(parsed.bullets || ''),
-    model: settings.MODEL_IMPROVE
-  };
-}
-
-function stepSpin_(settings, data, improvedText) {
-  const prompt = buildSpinPrompt_(data, improvedText);
-  const res = callOpenRouter_(
-    settings.OPENROUTER_API_KEY,
-    settings.MODEL_SPIN,
-    prompt,
-    settings.TEMPERATURE_SPIN
-  );
-  if (!res.ok) {
-    throw res.error;
-  }
-
-  const parsed = safeJsonParse_(res.content);
-  validateKeys_(parsed, ['spintext']);
-
-  return { spintext: parsed.spintext, model: settings.MODEL_SPIN };
-}
-
-function stepAvitoHtml_(settings, data, spintext) {
-  const prompt = buildAvitoHtmlPrompt_(settings, data, spintext);
-  const res = callOpenRouter_(
-    settings.OPENROUTER_API_KEY,
-    settings.MODEL_AVITO,
-    prompt,
-    settings.TEMPERATURE_AVITO
-  );
-  if (!res.ok) {
-    throw res.error;
-  }
-
-  const parsed = safeJsonParse_(res.content);
-  validateKeys_(parsed, ['html', 'qa_checks']);
-
-  return {
-    html: parsed.html,
-    qa_checks: Array.isArray(parsed.qa_checks)
-      ? parsed.qa_checks.join(', ')
-      : String(parsed.qa_checks || ''),
-    model: settings.MODEL_AVITO
-  };
-}
-
-function buildImprovePrompt_(data) {
-  const system = {
+function buildOfferWriterPrompt_(data, version) {
+  version = version || '1';
+  var system = {
     role: 'system',
-    content:
-      'Ты редактор коммерческих текстов для объявлений Avito. ' +
-      'Сохраняй факты, не выдумывай. Убирай воду. Добавляй доверие и структуру. ' +
-      'Не используй запрещенные обещания (гарантии результата, 100% и т.п.). ' +
-      'Отвечай строго валидным JSON без лишнего текста.'
+    content: 'Ты OfferWriter. Создаёшь продающий текст объявления и варианты заголовков. Факты не выдумывай. Без запрещённых обещаний (100%, гарантия результата). Ответ — только один валидный JSON-объект, без markdown и пояснений.'
   };
-
-  const user = {
+  var user = {
     role: 'user',
     content: JSON.stringify({
-      task: 'improve',
       product: String(data.product || ''),
       city: String(data.city || ''),
       tone: String(data.tone || 'нейтральный'),
       constraints: String(data.constraints || ''),
       source_text: String(data.source_text || ''),
       output_format: {
-        title: 'строка до 60 символов',
-        improved_text: 'строка',
-        bullets: 'массив из 5-8 коротких преимуществ'
+        title_variants: 'массив из 3 строк — заголовки до 60 символов',
+        offer_text: 'строка — продающий текст объявления',
+        bullets: 'массив строк — УТП/преимущества',
+        guarantees: 'массив строк — гарантии и доверие',
+        cta: 'строка — призыв к действию',
+        warnings: 'массив строк — замечания по тексту (или пустой массив)'
       }
     })
   };
-
   return [system, user];
+}
+
+function validateOfferWriterResponse_(data) {
+  validateKeys_(data, OFFER_WRITER_REQUIRED_KEYS);
+  var titles = ensureArray_(data.title_variants);
+  if (titles.length < 1) {
+    throw new Error('В ответе OfferWriter title_variants должен содержать минимум 1 элемент');
+  }
+}
+
+function stepOfferWriter_(settings, data) {
+  var model = settings.MODEL_OFFER || settings.MODEL_FALLBACK;
+  var temp = settings.TEMPERATURE_OFFER != null ? settings.TEMPERATURE_OFFER : 0.4;
+  var messages = buildOfferWriterPrompt_(data, settings.PROMPT_VERSION_OFFER);
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
+  if (!res.ok) throw res.error;
+
+  var parsed = parseStrictJson_(res.content);
+  if (!parsed.ok) {
+    messages.push({ role: 'user', content: JSON_RETRY_USER_MESSAGE });
+    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
+    if (!res.ok) throw res.error;
+    parsed = parseStrictJson_(res.content);
+  }
+  if (!parsed.ok) throw parsed.error;
+
+  var p = parsed.data;
+  validateOfferWriterResponse_(p);
+
+  var titles = ensureArray_(p.title_variants);
+  return {
+    offer_text: ensureString_(p.offer_text),
+    title_1: ensureString_(titles[0]).slice(0, 120),
+    title_2: ensureString_(titles[1]).slice(0, 120),
+    title_3: ensureString_(titles[2]).slice(0, 120),
+    bullets: ensureArray_(p.bullets).join(' • '),
+    guarantees: ensureArray_(p.guarantees),
+    cta: ensureString_(p.cta),
+    warnings: ensureArray_(p.warnings),
+    model: model
+  };
+}
+
+// --- AvitoFormatter: строгий JSON — spintax_text, avito_html, warnings ---
+
+var AVITO_FORMATTER_REQUIRED_KEYS = ['spintax_text', 'avito_html', 'warnings'];
+
+function buildAvitoFormatterPrompt_(settings, data, baseText, version) {
+  version = version || '1';
+  var system = {
+    role: 'system',
+    content: 'Ты AvitoFormatter. Делаешь уникализацию (spintax в формате {вариант1|вариант2}) и готовый HTML для Avito. Смысл сохраняй. Только <p>, <b>, эмодзи умеренно. Ответ — только один валидный JSON-объект, без markdown и пояснений.'
+  };
+  var user = {
+    role: 'user',
+    content: JSON.stringify({
+      product: String(data.product || ''),
+      city: String(data.city || ''),
+      base_text: String(baseText || ''),
+      style: settings.AVITO_STYLE || 'bold_emojis_safe',
+      output_format: {
+        spintax_text: 'строка — текст с spintax',
+        avito_html: 'строка — HTML для вставки в Avito',
+        warnings: 'массив строк — замечания (или пустой массив)'
+      }
+    })
+  };
+  return [system, user];
+}
+
+function validateAvitoFormatterResponse_(data) {
+  validateKeys_(data, AVITO_FORMATTER_REQUIRED_KEYS);
+}
+
+function stepAvitoFormatter_(settings, data, baseText) {
+  var model = settings.MODEL_FORMAT || settings.MODEL_FALLBACK;
+  var temp = settings.TEMPERATURE_FORMAT != null ? settings.TEMPERATURE_FORMAT : 0.5;
+  var messages = buildAvitoFormatterPrompt_(settings, data, baseText, settings.PROMPT_VERSION_FORMAT);
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
+  if (!res.ok) throw res.error;
+
+  var parsed = parseStrictJson_(res.content);
+  if (!parsed.ok) {
+    messages.push({ role: 'user', content: JSON_RETRY_USER_MESSAGE });
+    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
+    if (!res.ok) throw res.error;
+    parsed = parseStrictJson_(res.content);
+  }
+  if (!parsed.ok) throw parsed.error;
+
+  var p = parsed.data;
+  validateAvitoFormatterResponse_(p);
+
+  return {
+    spintax_text: ensureString_(p.spintax_text),
+    avito_html: ensureString_(p.avito_html),
+    warnings: ensureArray_(p.warnings),
+    model: model
+  };
+}
+
+// --- Legacy steps (совместимость) ---
+
+function stepImprove_(settings, data) {
+  var r = stepOfferWriter_(settings, data);
+  return {
+    title: r.title_1,
+    text: r.offer_text,
+    bullets: r.bullets || '',
+    model: r.model
+  };
+}
+
+function stepSpin_(settings, data, improvedText) {
+  var r = stepAvitoFormatter_(settings, data, improvedText);
+  return { spintext: r.spintax_text, model: r.model };
+}
+
+function stepAvitoHtml_(settings, data, spintext) {
+  var r = stepAvitoFormatter_(settings, data, spintext);
+  return {
+    html: r.avito_html,
+    qa_checks: (r.warnings || []).join(', '),
+    model: r.model
+  };
+}
+
+function buildImprovePrompt_(data) {
+  return buildOfferWriterPrompt_(data, '1');
 }
 
 function buildSpinPrompt_(data, improvedText) {
-  const system = {
-    role: 'system',
-    content:
-      'Ты создаешь спин-текст для уникализации объявлений Avito. ' +
-      'Делай спин блоками: фразы/предложения, а не по одному слову. ' +
-      'Сохраняй смысл и факты, не добавляй новые характеристики. ' +
-      'Формат: {вариант 1|вариант 2|вариант 3}. ' +
-      'Отвечай строго валидным JSON.'
-  };
-
-  const user = {
-    role: 'user',
-    content: JSON.stringify({
-      task: 'spin',
-      product: String(data.product || ''),
-      improved_text: improvedText,
-      requirements: {
-        variants_per_block: 3,
-        keep_facts: true,
-        avoid_synonym_trash: true,
-        length: 'примерно как improved_text'
-      },
-      output_format: { spintext: 'строка' }
-    })
-  };
-
-  return [system, user];
+  return buildAvitoFormatterPrompt_({ AVITO_STYLE: 'bold_emojis_safe' }, data, improvedText, '1');
 }
 
 function buildAvitoHtmlPrompt_(settings, data, spintext) {
-  const system = {
+  return buildAvitoFormatterPrompt_(settings, data, spintext, '1');
+}
+
+// --- QA автоисправление (AUTO_FIX): один запрос — вернуть только исправленный текст ---
+
+function buildQAFixPrompt_(text, reasons, context, limits) {
+  var limitStr = limits && limits.limitChars != null ? ' Лимит символов: ' + limits.limitChars + '.' : '';
+  var system = {
     role: 'system',
-    content:
-      'Ты создаешь готовое объявление для Avito в HTML. ' +
-      'Используй <p> и <b>. Можно эмодзи, но умеренно. ' +
-      'Никаких запрещенных обещаний. Не выдумывай факты. ' +
-      'Сделай читабельную структуру: лид → выгоды → условия → призыв. ' +
-      'Отвечай строго валидным JSON.'
+    content: 'Ты редактор объявлений Avito. Исправляй текст по замечаниям, укладывайся в лимиты, сохраняй смысл. Ответ — только исправленный текст, без пояснений и markdown.'
   };
-
-  const user = {
+  var user = {
     role: 'user',
-    content: JSON.stringify({
-      task: 'avito_html',
-      product: String(data.product || ''),
-      city: String(data.city || ''),
-      constraints: String(data.constraints || ''),
-      spintext: spintext,
-      style: settings.AVITO_STYLE,
-      output_format: {
-        html: 'строка html',
-        qa_checks: 'массив строк (короткие проверки качества)'
-      }
-    })
+    content: 'Контекст: ' + (context === 'title' ? 'заголовок объявления' : 'описание объявления (HTML допускается).') + limitStr + '\n\nЗамечания QA: ' + (reasons.join(', ')) + '\n\nИсходный текст:\n' + String(text || '')
   };
-
   return [system, user];
+}
+
+/**
+ * Один запрос к модели: исправить текст по замечаниям QA.
+ * @param {Object} settings
+ * @param {string} text - исходный текст
+ * @param {string[]} reasons - список причин (из validateAvitoText_)
+ * @param {string} context - 'title' или 'desc'
+ * @param {Object} limits - { limitChars: number }
+ * @returns {string|null} исправленный текст или null при ошибке
+ */
+function stepQAFix_(settings, text, reasons, context, limits) {
+  if (!text || !reasons || reasons.length === 0) return null;
+  var model = settings.MODEL_FORMAT || settings.MODEL_FALLBACK;
+  var temp = 0.3;
+  var messages = buildQAFixPrompt_(text, reasons, context || 'desc', limits);
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, false);
+  if (!res.ok) return null;
+  var content = String(res.content || '').trim();
+  content = content.replace(/^```\w*\s*/i, '').replace(/\s*```$/i, '').trim();
+  return content || null;
 }

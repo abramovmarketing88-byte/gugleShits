@@ -1,17 +1,20 @@
-function callOpenRouter_(apiKey, model, messages, temperature) {
+function callOpenRouter_(apiKey, model, messages, temperature, useJsonFormat) {
   if (!apiKey) {
     return { ok: false, error: new Error('Не задан OPENROUTER_API_KEY в SETTINGS') };
   }
+  if (useJsonFormat === undefined) useJsonFormat = true;
 
-  const url = 'https://openrouter.ai/api/v1/chat/completions';
-  const payload = {
+  var url = 'https://openrouter.ai/api/v1/chat/completions';
+  var payload = {
     model: model,
     messages: messages,
-    temperature: temperature,
-    response_format: { type: 'json_object' }
+    temperature: temperature
   };
+  if (useJsonFormat) {
+    payload.response_format = { type: 'json_object' };
+  }
 
-  const options = {
+  var options = {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
@@ -23,17 +26,17 @@ function callOpenRouter_(apiKey, model, messages, temperature) {
     }
   };
 
-  const maxAttempts = 4;
-  let lastErr = null;
+  var maxAttempts = 4;
+  var lastErr = null;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const resp = UrlFetchApp.fetch(url, options);
-    const code = resp.getResponseCode();
-    const body = resp.getContentText();
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    var resp = UrlFetchApp.fetch(url, options);
+    var code = resp.getResponseCode();
+    var body = resp.getContentText();
 
     if (code >= 200 && code < 300) {
-      const json = JSON.parse(body);
-      const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content
+      var json = JSON.parse(body);
+      var content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content
         ? json.choices[0].message.content
         : '';
       return { ok: true, content: content, raw: json };
