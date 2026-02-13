@@ -53,7 +53,8 @@ function loadSettings_(ss) {
     LIMIT_DESC_CHARS: Number(map.LIMIT_DESC_CHARS || 4000),
     EMOJI_MAX: Number(map.EMOJI_MAX || 15),
     CAPS_MAX_PERCENT: Number(map.CAPS_MAX_PERCENT || 0.35),
-    AUTO_FIX: String(map.AUTO_FIX || '').toLowerCase() === 'true'
+    AUTO_FIX: String(map.AUTO_FIX || '').toLowerCase() === 'true',
+    cache_ttl_hours: Number(map.cache_ttl_hours || map.CACHE_TTL_HOURS || 72)
   };
 }
 
@@ -309,6 +310,69 @@ function shouldApplyAutoFix_(settings, reasons) {
   return settings.AUTO_FIX && reasons && reasons.length > 0;
 }
 
+// --- Кэш (ScriptProperties + TTL) ---
+
+var CACHE_KEY_PREFIX = 'avito_';
+var CACHE_VALUE_MAX_BYTES = 8000;
+
+/**
+ * Строит ключ кэша: hash(role + prompt_version + model + normalized_input_text).
+ * @param {string} role - например 'OfferWriter', 'AvitoFormatter'
+ * @param {string} promptVersion
+ * @param {string} model
+ * @param {string} normalizedInputText - нормализованный JSON или строка ввода
+ * @returns {string}
+ */
+function buildCacheKey_(role, promptVersion, model, normalizedInputText) {
+  var str = (role || '') + '|' + (promptVersion || '') + '|' + (model || '') + '|' + (normalizedInputText || '');
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str, Utilities.Charset.UTF_8);
+  var hex = digest.map(function (b) {
+    var n = b < 0 ? b + 256 : b;
+    return (n < 16 ? '0' : '') + n.toString(16);
+  }).join('');
+  return CACHE_KEY_PREFIX + hex;
+}
+
+/**
+ * Читает значение из кэша. Если TTL истёк или ключа нет — возвращает null.
+ * @param {string} key - ключ из buildCacheKey_
+ * @param {number} ttlHours - не используется при чтении (expiry уже в сохранённых данных)
+ * @returns {string|null}
+ */
+function getCache_(key, ttlHours) {
+  if (!key) return null;
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(key);
+  if (!raw) return null;
+  try {
+    var obj = JSON.parse(raw);
+    if (obj.expires != null && Date.now() > obj.expires) {
+      props.deleteProperty(key);
+      return null;
+    }
+    return obj.data != null ? obj.data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Записывает значение в кэш с TTL в часах.
+ * @param {string} key
+ * @param {string} value - строка (например content ответа API)
+ * @param {number} ttlHours
+ */
+function setCache_(key, value, ttlHours) {
+  if (!key || value == null) return;
+  var ttl = (ttlHours != null && ttlHours > 0) ? ttlHours : 72;
+  var expires = Date.now() + ttl * 3600000;
+  var payload = JSON.stringify({ expires: expires, data: String(value) });
+  if (payload.length > CACHE_VALUE_MAX_BYTES) return;
+  try {
+    PropertiesService.getScriptProperties().setProperty(key, payload);
+  } catch (e) {}
+}
+
 function writeOut_(outSheet, id, patch) {
   var rowIndex = findOrCreateOutRow_(outSheet, id);
   var headers = getOutHeaders_(outSheet);
@@ -388,6 +452,13 @@ function clearOutFromHtml_(outSheet, id) {
   ['avito_html', 'qa_checks'].forEach(function (col) {
     if (h[col]) outSheet.getRange(rowIndex, h[col]).setValue('');
   });
+}
+
+/**
+ * Очищает все выходные поля в OUT для одной строки (по id).
+ */
+function clearOutFully_(outSheet, id) {
+  clearOutFromOffer_(outSheet, id);
 }
 
 function findOutRowIndex_(outSheet, id) {

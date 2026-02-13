@@ -12,6 +12,15 @@ function onOpen() {
     .addItem('Перегенерировать с шага SPIN', 'menuRegenFromSpin')
     .addItem('Перегенерировать с шага HTML', 'menuRegenFromHtml')
     .addSeparator()
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('Без ИИ')
+      .addItem('Экспорт выбранных', 'menuExportSelected')
+      .addItem('Копировать HTML (модальное окно)', 'menuCopyHtmlModal')
+      .addSeparator()
+      .addItem('Очистить выходы', 'menuClearOutputs')
+      .addItem('Сбросить в NEW', 'menuResetToNew')
+      .addItem('Поставить в QUEUED', 'menuSetQueued')
+      .addItem('Пометить DONE вручную', 'menuMarkDoneManually'))
+    .addSeparator()
     .addItem('Остановить', 'menuStop')
     .addItem('Логи', 'menuLogs')
     .addToUi();
@@ -195,7 +204,7 @@ function runStateMachine_(ss, settings, inputSheet, outSheet, logSheet, rowIndex
         tokens_est: estimateTokens_(offer.offer_text)
       });
       setStatus_(inputSheet, rowIndex, 'OFFER_OK', '');
-      logAction_(logSheet, id, 'OfferWriter', 'PROCESSING', 'OFFER_OK', Date.now() - t0, false, '');
+      logAction_(logSheet, id, 'OfferWriter', 'PROCESSING', 'OFFER_OK', Date.now() - t0, !!offer.cache_hit, '');
       currentStatus = 'OFFER_OK';
     }
     if (currentStatus === 'OFFER_OK') {
@@ -211,7 +220,7 @@ function runStateMachine_(ss, settings, inputSheet, outSheet, logSheet, rowIndex
         tokens_est: estimateTokens_(fmt.avito_html)
       });
       setStatus_(inputSheet, rowIndex, 'FORMAT_OK', '');
-      logAction_(logSheet, id, 'AvitoFormatter', 'OFFER_OK', 'FORMAT_OK', Date.now() - t0, false, '');
+      logAction_(logSheet, id, 'AvitoFormatter', 'OFFER_OK', 'FORMAT_OK', Date.now() - t0, !!fmt.cache_hit, '');
       currentStatus = 'FORMAT_OK';
     }
     if (currentStatus === 'FORMAT_OK') {
@@ -237,7 +246,7 @@ function runStateMachine_(ss, settings, inputSheet, outSheet, logSheet, rowIndex
         tokens_est: estimateTokens_(offer2.offer_text)
       });
       setStatus_(inputSheet, rowIndex, 'OFFER_OK', '');
-      logAction_(logSheet, id, 'OfferWriter', 'PROCESSING', 'OFFER_OK', Date.now() - t0, false, '');
+      logAction_(logSheet, id, 'OfferWriter', 'PROCESSING', 'OFFER_OK', Date.now() - t0, !!offer2.cache_hit, '');
       currentStatus = 'OFFER_OK';
     }
     if (currentStatus === 'OFFER_OK') {
@@ -264,7 +273,7 @@ function runStateMachine_(ss, settings, inputSheet, outSheet, logSheet, rowIndex
         tokens_est: estimateTokens_(fmtSpin.avito_html)
       });
       setStatus_(inputSheet, rowIndex, 'FORMAT_OK', '');
-      logAction_(logSheet, id, 'AvitoFormatter', 'PROCESSING', 'FORMAT_OK', Date.now() - t0, false, '');
+      logAction_(logSheet, id, 'AvitoFormatter', 'PROCESSING', 'FORMAT_OK', Date.now() - t0, !!fmtSpin.cache_hit, '');
       currentStatus = 'FORMAT_OK';
     }
     if (currentStatus === 'FORMAT_OK') {
@@ -291,7 +300,7 @@ function runStateMachine_(ss, settings, inputSheet, outSheet, logSheet, rowIndex
         tokens_est: estimateTokens_(fmtHtml.avito_html)
       });
       setStatus_(inputSheet, rowIndex, 'FORMAT_OK', '');
-      logAction_(logSheet, id, 'AvitoFormatter', 'PROCESSING', 'FORMAT_OK', Date.now() - t0, false, '');
+      logAction_(logSheet, id, 'AvitoFormatter', 'PROCESSING', 'FORMAT_OK', Date.now() - t0, !!fmtHtml.cache_hit, '');
       currentStatus = 'FORMAT_OK';
     }
     if (currentStatus === 'FORMAT_OK') {
@@ -464,4 +473,164 @@ function showLastLogs() {
   var values = logSheet.getRange(start, 1, lastRow, logCols).getValues();
   var text = values.map(function (row) { return row.join(' | '); }).join('\n');
   SpreadsheetApp.getUi().alert(text || 'Логов пока нет');
+}
+
+// --- Операции без ИИ: экспорт, копирование HTML, пакетные действия ---
+
+/**
+ * Возвращает массив { id, rowIndex } по выделенному диапазону на листе INPUT.
+ */
+function getSelectedInputRowIds_(ss) {
+  var inputSheet = ss.getSheetByName('INPUT');
+  var range = ss.getActiveRange();
+  if (!range || range.getSheet().getSheetId() !== inputSheet.getSheetId()) return [];
+  var startRow = range.getRow();
+  var numRows = range.getNumRows();
+  var result = [];
+  for (var i = 0; i < numRows; i++) {
+    var rowIndex = startRow + i;
+    if (rowIndex === 1) continue;
+    var id = inputSheet.getRange(rowIndex, INPUT_COL_ID).getValue();
+    if (id == null || id === '') continue;
+    result.push({ id: id, rowIndex: rowIndex });
+  }
+  return result;
+}
+
+function menuExportSelected() {
+  var ss = SpreadsheetApp.getActive();
+  var selected = getSelectedInputRowIds_(ss);
+  if (selected.length === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите строки на листе INPUT.', 'Avito AI', 4);
+    return;
+  }
+  var outSheet = ss.getSheetByName('OUT');
+  if (!outSheet) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Лист OUT не найден.', 'Avito AI', 3);
+    return;
+  }
+  var exportSheet = ss.getSheetByName('EXPORT');
+  if (exportSheet) exportSheet.clear(); else exportSheet = ss.insertSheet('EXPORT');
+  exportSheet.getRange(1, 1, 1, 3).setValues([['id', 'title', 'avito_html']]).setFontWeight('bold');
+  var row = 2;
+  for (var i = 0; i < selected.length; i++) {
+    var outRow = readOutById_(outSheet, selected[i].id);
+    var title = outRow.title_1 || outRow.title || '';
+    var html = outRow.avito_html || '';
+    exportSheet.getRange(row, 1).setValue(selected[i].id);
+    exportSheet.getRange(row, 2).setValue(title);
+    exportSheet.getRange(row, 3).setValue(html);
+    row++;
+  }
+  exportSheet.autoResizeColumns(1, 3);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Экспорт: ' + selected.length + ' строк на лист EXPORT.', 'Avito AI', 4);
+}
+
+function menuCopyHtmlModal() {
+  var ss = SpreadsheetApp.getActive();
+  var activeSheet = ss.getActiveSheet();
+  var range = ss.getActiveRange();
+  if (!range || range.getNumRows() !== 1 || range.getNumColumns() !== 1) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите одну ячейку (OUT: строка с объявлением, или INPUT: строка с id).', 'Avito AI', 4);
+    return;
+  }
+  var outSheet = ss.getSheetByName('OUT');
+  var inputSheet = ss.getSheetByName('INPUT');
+  if (!outSheet || !inputSheet) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Листы INPUT и OUT должны существовать.', 'Avito AI', 3);
+    return;
+  }
+  var rowIndex = range.getRow();
+  var id = null;
+  var html = '';
+  if (activeSheet.getSheetId() === outSheet.getSheetId()) {
+    id = outSheet.getRange(rowIndex, 1).getValue();
+    var h = getOutHeaders_(outSheet);
+    var colAvito = h.avito_html;
+    if (colAvito) html = outSheet.getRange(rowIndex, colAvito).getValue() || '';
+  } else if (activeSheet.getSheetId() === inputSheet.getSheetId()) {
+    id = inputSheet.getRange(rowIndex, INPUT_COL_ID).getValue();
+    if (id != null && id !== '') {
+      var outRow = readOutById_(outSheet, id);
+      html = outRow.avito_html || '';
+    }
+  }
+  if (!html) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(id ? 'Нет HTML для id ' + id : 'Выделите ячейку на листе INPUT или OUT.', 'Avito AI', 4);
+    return;
+  }
+  var tpl = HtmlService.createTemplateFromFile('CopyHtmlDialog');
+  tpl.contentJson = JSON.stringify(html);
+  var htmlOutput = tpl.evaluate().setWidth(520).setHeight(320);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Копировать HTML в буфер');
+}
+
+function menuClearOutputs() {
+  var ss = SpreadsheetApp.getActive();
+  var selected = getSelectedInputRowIds_(ss);
+  if (selected.length === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите строки на листе INPUT.', 'Avito AI', 4);
+    return;
+  }
+  var outSheet = ss.getSheetByName('OUT');
+  for (var i = 0; i < selected.length; i++) clearOutFully_(outSheet, selected[i].id);
+  refreshControlDashboard_(ss);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Выходы очищены: ' + selected.length + ' строк.', 'Avito AI', 4);
+}
+
+function menuResetToNew() {
+  var ss = SpreadsheetApp.getActive();
+  var inputSheet = ss.getSheetByName('INPUT');
+  var selected = getSelectedInputRowIds_(ss);
+  if (selected.length === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите строки на листе INPUT.', 'Avito AI', 4);
+    return;
+  }
+  for (var i = 0; i < selected.length; i++) {
+    var r = selected[i].rowIndex;
+    inputSheet.getRange(r, INPUT_COL_STATUS).setValue('NEW');
+    inputSheet.getRange(r, INPUT_COL_LAST_ERROR).setValue('');
+    inputSheet.getRange(r, INPUT_COL_UPDATED_AT).setValue('');
+    inputSheet.getRange(r, INPUT_COL_LOCKED_AT).setValue('');
+    inputSheet.getRange(r, INPUT_COL_LOCKED_BY).setValue('');
+    inputSheet.getRange(r, INPUT_COL_PROCESSING).setValue(false);
+  }
+  refreshControlDashboard_(ss);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Сброшено в NEW: ' + selected.length + ' строк.', 'Avito AI', 4);
+}
+
+function menuSetQueued() {
+  var ss = SpreadsheetApp.getActive();
+  var inputSheet = ss.getSheetByName('INPUT');
+  var selected = getSelectedInputRowIds_(ss);
+  if (selected.length === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите строки на листе INPUT.', 'Avito AI', 4);
+    return;
+  }
+  for (var i = 0; i < selected.length; i++) {
+    var r = selected[i].rowIndex;
+    inputSheet.getRange(r, INPUT_COL_STATUS).setValue('QUEUED');
+    inputSheet.getRange(r, INPUT_COL_LAST_ERROR).setValue('');
+    inputSheet.getRange(r, INPUT_COL_UPDATED_AT).setValue(new Date());
+    inputSheet.getRange(r, INPUT_COL_LOCKED_AT).setValue('');
+    inputSheet.getRange(r, INPUT_COL_LOCKED_BY).setValue('');
+    inputSheet.getRange(r, INPUT_COL_PROCESSING).setValue(false);
+  }
+  refreshControlDashboard_(ss);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Поставлено в QUEUED: ' + selected.length + ' строк.', 'Avito AI', 4);
+}
+
+function menuMarkDoneManually() {
+  var ss = SpreadsheetApp.getActive();
+  var inputSheet = ss.getSheetByName('INPUT');
+  var selected = getSelectedInputRowIds_(ss);
+  if (selected.length === 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Выделите строки на листе INPUT.', 'Avito AI', 4);
+    return;
+  }
+  for (var i = 0; i < selected.length; i++) {
+    inputSheet.getRange(selected[i].rowIndex, INPUT_COL_STATUS).setValue('DONE');
+  }
+  refreshControlDashboard_(ss);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Помечено DONE: ' + selected.length + ' строк.', 'Avito AI', 4);
 }

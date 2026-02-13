@@ -39,16 +39,58 @@ function validateOfferWriterResponse_(data) {
 
 function stepOfferWriter_(settings, data) {
   var model = settings.MODEL_OFFER || settings.MODEL_FALLBACK;
+  var ttlHours = settings.cache_ttl_hours != null ? settings.cache_ttl_hours : 72;
+  var normalizedInput = JSON.stringify({
+    product: String(data.product || '').trim(),
+    city: String(data.city || '').trim(),
+    tone: String(data.tone || '').trim(),
+    constraints: String(data.constraints || '').trim(),
+    source_text: String(data.source_text || '').trim()
+  });
+  var cacheKey = buildCacheKey_('OfferWriter', settings.PROMPT_VERSION_OFFER, model, normalizedInput);
+  var cached = getCache_(cacheKey, ttlHours);
+  if (cached) {
+    var parsed = parseStrictJson_(cached);
+    if (parsed.ok) {
+      var p = parsed.data;
+      try {
+        validateOfferWriterResponse_(p);
+        var titles = ensureArray_(p.title_variants);
+        return {
+          offer_text: ensureString_(p.offer_text),
+          title_1: ensureString_(titles[0]).slice(0, 120),
+          title_2: ensureString_(titles[1]).slice(0, 120),
+          title_3: ensureString_(titles[2]).slice(0, 120),
+          bullets: ensureArray_(p.bullets).join(' • '),
+          guarantees: ensureArray_(p.guarantees),
+          cta: ensureString_(p.cta),
+          warnings: ensureArray_(p.warnings),
+          model: model,
+          cache_hit: true
+        };
+      } catch (e) {}
+    }
+  }
+
   var temp = settings.TEMPERATURE_OFFER != null ? settings.TEMPERATURE_OFFER : 0.4;
   var messages = buildOfferWriterPrompt_(data, settings.PROMPT_VERSION_OFFER);
-  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
-  if (!res.ok) throw res.error;
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, true, settings.MODEL_FALLBACK);
+  if (!res.ok) {
+    var meta = ' [model_used=' + (res.model_used || model) + ' attempt=' + (res.attempt || 0) + ' latency_ms=' + (res.latency_ms || 0) + ' error_code=' + (res.error_code || '') + ']';
+    throw new Error((res.error && res.error.message) || 'API error' + meta);
+  }
+  model = res.model_used || model;
+  setCache_(cacheKey, res.content, ttlHours);
 
   var parsed = parseStrictJson_(res.content);
   if (!parsed.ok) {
     messages.push({ role: 'user', content: JSON_RETRY_USER_MESSAGE });
-    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
-    if (!res.ok) throw res.error;
+    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, true, settings.MODEL_FALLBACK);
+    if (!res.ok) {
+      meta = ' [model_used=' + (res.model_used || model) + ' attempt=' + (res.attempt || 0) + ' latency_ms=' + (res.latency_ms || 0) + ' error_code=' + (res.error_code || '') + ']';
+      throw new Error((res.error && res.error.message) || 'API error' + meta);
+    }
+    model = res.model_used || model;
     parsed = parseStrictJson_(res.content);
   }
   if (!parsed.ok) throw parsed.error;
@@ -66,7 +108,8 @@ function stepOfferWriter_(settings, data) {
     guarantees: ensureArray_(p.guarantees),
     cta: ensureString_(p.cta),
     warnings: ensureArray_(p.warnings),
-    model: model
+    model: model,
+    cache_hit: false
   };
 }
 
@@ -103,16 +146,51 @@ function validateAvitoFormatterResponse_(data) {
 
 function stepAvitoFormatter_(settings, data, baseText) {
   var model = settings.MODEL_FORMAT || settings.MODEL_FALLBACK;
+  var ttlHours = settings.cache_ttl_hours != null ? settings.cache_ttl_hours : 72;
+  var normalizedInput = JSON.stringify({
+    product: String(data.product || '').trim(),
+    city: String(data.city || '').trim(),
+    base_text: String(baseText || '').trim(),
+    style: String(settings.AVITO_STYLE || '').trim()
+  });
+  var cacheKey = buildCacheKey_('AvitoFormatter', settings.PROMPT_VERSION_FORMAT, model, normalizedInput);
+  var cached = getCache_(cacheKey, ttlHours);
+  if (cached) {
+    var parsed = parseStrictJson_(cached);
+    if (parsed.ok) {
+      var p = parsed.data;
+      try {
+        validateAvitoFormatterResponse_(p);
+        return {
+          spintax_text: ensureString_(p.spintax_text),
+          avito_html: ensureString_(p.avito_html),
+          warnings: ensureArray_(p.warnings),
+          model: model,
+          cache_hit: true
+        };
+      } catch (e) {}
+    }
+  }
+
   var temp = settings.TEMPERATURE_FORMAT != null ? settings.TEMPERATURE_FORMAT : 0.5;
   var messages = buildAvitoFormatterPrompt_(settings, data, baseText, settings.PROMPT_VERSION_FORMAT);
-  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
-  if (!res.ok) throw res.error;
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, true, settings.MODEL_FALLBACK);
+  if (!res.ok) {
+    var metaFmt = ' [model_used=' + (res.model_used || model) + ' attempt=' + (res.attempt || 0) + ' latency_ms=' + (res.latency_ms || 0) + ' error_code=' + (res.error_code || '') + ']';
+    throw new Error((res.error && res.error.message) || 'API error' + metaFmt);
+  }
+  model = res.model_used || model;
+  setCache_(cacheKey, res.content, ttlHours);
 
   var parsed = parseStrictJson_(res.content);
   if (!parsed.ok) {
     messages.push({ role: 'user', content: JSON_RETRY_USER_MESSAGE });
-    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp);
-    if (!res.ok) throw res.error;
+    res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, true, settings.MODEL_FALLBACK);
+    if (!res.ok) {
+      metaFmt = ' [model_used=' + (res.model_used || model) + ' attempt=' + (res.attempt || 0) + ' latency_ms=' + (res.latency_ms || 0) + ' error_code=' + (res.error_code || '') + ']';
+      throw new Error((res.error && res.error.message) || 'API error' + metaFmt);
+    }
+    model = res.model_used || model;
     parsed = parseStrictJson_(res.content);
   }
   if (!parsed.ok) throw parsed.error;
@@ -124,7 +202,8 @@ function stepAvitoFormatter_(settings, data, baseText) {
     spintax_text: ensureString_(p.spintax_text),
     avito_html: ensureString_(p.avito_html),
     warnings: ensureArray_(p.warnings),
-    model: model
+    model: model,
+    cache_hit: false
   };
 }
 
@@ -195,7 +274,7 @@ function stepQAFix_(settings, text, reasons, context, limits) {
   var model = settings.MODEL_FORMAT || settings.MODEL_FALLBACK;
   var temp = 0.3;
   var messages = buildQAFixPrompt_(text, reasons, context || 'desc', limits);
-  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, false);
+  var res = callOpenRouter_(settings.OPENROUTER_API_KEY, model, messages, temp, false, settings.MODEL_FALLBACK);
   if (!res.ok) return null;
   var content = String(res.content || '').trim();
   content = content.replace(/^```\w*\s*/i, '').replace(/\s*```$/i, '').trim();
