@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 16px; margin: 0; }
+    h2 { margin: 0 0 12px 0; font-size: 16px; }
+    label { display: block; margin-top: 10px; margin-bottom: 4px; font-weight: bold; font-size: 12px; }
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      margin-bottom: 4px;
+      font-size: 12px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      margin-top: 14px;
+      padding: 10px 20px;
+      font-size: 13px;
+      background: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #1557b0; }
+    .msg { margin-top: 10px; font-size: 12px; padding: 6px; border-radius: 4px; }
+    .msg.ok { color: #0d652d; background: #e6f4ea; }
+    .msg.err { color: #c5221f; background: #fce8e6; }
+    .hint { font-size: 11px; color: #666; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <h2>OpenRouter Settings</h2>
+
+  <label for="apiKey">OpenRouter API Key</label>
+  <input type="password" id="apiKey" placeholder="sk-or-v1-..." autocomplete="off" />
+  <p class="hint">Ключ берётся на <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></p>
+
+  <label for="model">Model</label>
+  <select id="model">
+    <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
+    <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+    <option value="openai/gpt-4o">openai/gpt-4o</option>
+    <option value="google/gemini-pro-1.5">google/gemini-pro-1.5</option>
+    <option value="google/gemini-2.0-flash">google/gemini-2.0-flash</option>
+  </select>
+
+  <button id="saveBtn">Save Settings</button>
+  <p id="msg" class="msg" style="display:none;"></p>
+
+  <script>
+    (function() {
+      var msgEl = document.getElementById('msg');
+      function showMsg(text, isError) {
+        msgEl.textContent = text || '';
+        msgEl.style.display = text ? 'block' : 'none';
+        msgEl.className = 'msg ' + (isError ? 'err' : 'ok');
+      }
+
+      // При открытии сайдбара подгружаем сохранённые значения
+      google.script.run
+        .withSuccessHandler(function(data) {
+          if (data && data.apiKey) document.getElementById('apiKey').value = data.apiKey;
+          if (data && data.model) {
+            var sel = document.getElementById('model');
+            sel.value = data.model;
+            if (sel.value !== data.model) {
+              for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === data.model) { sel.selectedIndex = i; break; }
+              }
+            }
+          }
+        })
+        .withFailureHandler(function(err) {
+          var s = (err && err.message) ? err.message : String(err);
+          showMsg('Загрузка настроек: ' + s, true);
+        })
+        .getStoredApiSettings();
+
+      document.getElementById('saveBtn').addEventListener('click', function() {
+        var apiKey = document.getElementById('apiKey').value.trim();
+        var model = document.getElementById('model').value;
+        if (!apiKey) {
+          showMsg('Введите API ключ.', true);
+          return;
+        }
+        var btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+        showMsg('Сохранение…', false);
+        google.script.run
+          .withSuccessHandler(function() {
+            showMsg('Настройки сохранены.');
+            btn.disabled = false;
+          })
+          .withFailureHandler(function(err) {
+            var s = (err && err.message) ? err.message : String(err);
+            showMsg('Ошибка сохранения: ' + s + ' Добавьте в Code.gs функции getStoredApiSettings и saveApiSettings.', true);
+            btn.disabled = false;
+          })
+          .saveApiSettings(apiKey, model);
+      });
+    })();
+  </script>
+</body>
+</html>

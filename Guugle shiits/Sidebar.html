@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body { font-family: 'Inter', system-ui, sans-serif; }
+      /* Fallback if Tailwind CDN is blocked */
+      .btn-primary { padding: 0.5rem 1rem; background: #1a73e8; color: #fff; border: none; border-radius: 6px; font-weight: 500; cursor: pointer; }
+      .btn-primary:hover { background: #1557b0; }
+      .input-field { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #dadce0; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+      .input-field:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.2); }
+      .select-field { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #dadce0; border-radius: 6px; font-size: 14px; background: #fff; cursor: pointer; box-sizing: border-box; }
+      .notice { padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 13px; display: none; }
+      .notice.success { background: #e6f4ea; color: #137333; border: 1px solid #81c995; }
+      .notice.error { background: #fce8e6; color: #c5221f; border: 1px solid #f5c6cb; }
+    </style>
+  </head>
+  <body class="p-4 bg-gray-50 min-h-screen">
+    <div class="max-w-sm">
+      <h2 class="text-lg font-semibold text-gray-800 mb-4">OpenRouter Settings</h2>
+
+      <label for="apiKey" class="block text-sm font-medium text-gray-700 mb-1">OpenRouter API Key</label>
+      <input
+        type="password"
+        id="apiKey"
+        placeholder="sk-or-v1-..."
+        class="input-field mb-4 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        autocomplete="off"
+      >
+
+      <label for="model" class="block text-sm font-medium text-gray-700 mb-1">Model Selection</label>
+      <select
+        id="model"
+        class="select-field mb-4 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
+        <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+        <option value="google/gemini-pro-1.5">google/gemini-pro-1.5</option>
+      </select>
+
+      <button
+        id="saveBtn"
+        type="button"
+        class="btn-primary w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition"
+      >
+        Save Settings
+      </button>
+
+      <div id="notice" class="notice success mt-4" role="status"></div>
+
+      <details class="mt-6 pt-4 border-t border-gray-200">
+        <summary class="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">Колонки A–E: что заполнять</summary>
+        <ul class="mt-2 text-xs text-gray-600 space-y-1.5 list-disc list-inside">
+          <li><strong>A — Продукт:</strong> название продукта или услуги.</li>
+          <li><strong>B — Контекст:</strong> ниша или подсказки (напр. «бухучёт для малого бизнеса»). Можно пусто — сегменты ЦА <strong>генерирует ИИ</strong> в F. Для повторного прогона: вставь сегмент из F → снова анализ.</li>
+          <li><strong>C — Желаемый результат:</strong> какую цель хочет достичь аудитория?</li>
+          <li><strong>D — Болевые точки:</strong> что мешает, раздражает, отталкивает.</li>
+          <li><strong>E — Текущие альтернативы:</strong> чем решают задачу сейчас (конкуренты, старые методы).</li>
+        </ul>
+        <p class="mt-2 text-xs text-gray-500">ИИ выдаёт <strong>несколько сегментов</strong> (3–5 или все): под каждый — своя строка с анализом в <strong>F–K</strong>. F = сегмент ЦА, далее Main Job, эм./соц. задачи, силы прогресса, сдерживания, UVP.</p>
+      </details>
+    </div>
+
+    <script>
+      (function() {
+        var apiKeyEl = document.getElementById('apiKey');
+        var modelEl = document.getElementById('model');
+        var saveBtn = document.getElementById('saveBtn');
+        var notice = document.getElementById('notice');
+
+        function showSuccess(message) {
+          notice.textContent = message;
+          notice.classList.remove('error');
+          notice.classList.add('success');
+          notice.style.display = 'block';
+          setTimeout(function() {
+            notice.style.display = 'none';
+          }, 4000);
+        }
+
+        function showError(message) {
+          notice.textContent = message;
+          notice.classList.remove('success');
+          notice.classList.add('error');
+          notice.style.display = 'block';
+          setTimeout(function() {
+            notice.style.display = 'none';
+            notice.classList.remove('error');
+          }, 5000);
+        }
+
+        function setLoading(loading) {
+          saveBtn.disabled = loading;
+          saveBtn.textContent = loading ? 'Saving…' : 'Save Settings';
+        }
+
+        saveBtn.addEventListener('click', function() {
+          var apiKey = apiKeyEl.value.trim();
+          var model = modelEl.value;
+          if (!apiKey) {
+            showError('Please enter your OpenRouter API key.');
+            return;
+          }
+          setLoading(true);
+          google.script.run
+            .withSuccessHandler(function() {
+              setLoading(false);
+              showSuccess('Settings saved successfully.');
+            })
+            .withFailureHandler(function(err) {
+              setLoading(false);
+              showError('Could not save: ' + (err.message || String(err)));
+            })
+            .saveSettings(apiKey, model);
+        });
+
+        // Load saved settings when sidebar opens (model only; API key not echoed back)
+        google.script.run
+          .withSuccessHandler(function(settings) {
+            if (settings && settings.model) modelEl.value = settings.model;
+          })
+          .withFailureHandler(function() {})
+          .getSettings();
+      })();
+    </script>
+  </body>
+</html>
