@@ -9,6 +9,12 @@ function onOpen() {
     .addItem('Setup API Key & Model', 'showOpenRouterSidebar')
     .addItem('Выделить колонки и подсказки', 'menuHighlightColumns')
     .addItem('Run JTBD Analysis', 'menuRunJtbdAnalysis')
+    .addSeparator()
+    .addItem('Подготовить листы оффера', 'menuSetupOfferSheets')
+    .addItem('Обновить список сегментов', 'menuRefreshSegmentList')
+    .addItem('Подставить сегмент', 'menuPullSegment')
+    .addItem('Сгенерировать оффер', 'generateOffer')
+    .addItem('Обнулить оффер', 'menuResetOffer')
     .addToUi();
 }
 
@@ -278,4 +284,146 @@ function callGemini_(apiKey, model, systemPrompt, userContent) {
   } catch (e) {
     return null;
   }
+}
+
+// --- Конструктор оффера (лист SEGMENTS + лист ОФФЕР) ---
+
+var SEGMENTS_HEADERS = ['Код сегмента', 'Название', 'Главная боль', 'Желание', 'Страх', 'Триггер', 'Силы прогресса', 'Силы сдерживания'];
+var OFFER_LABELS = ['Сегмент', 'Главная боль', 'Желание', 'Страх', 'Триггер', 'Силы прогресса', 'Силы сдерживания', 'Акция', 'Спецпредложение', 'Гарантия', 'Формат работы'];
+
+function menuSetupOfferSheets() {
+  ensureSegmentsSheet_();
+  ensureOfferSheet_();
+  SpreadsheetApp.getActiveSpreadsheet().toast('Листы готовы. Заполните SEGMENTS (несколько строк — несколько ЦА), на ОФФЕР выберите сегмент из списка.', 'Оффер', 6);
+}
+
+function menuRefreshSegmentList() {
+  ensureOfferSheet_();
+  SpreadsheetApp.getActiveSpreadsheet().toast('Список сегментов обновлён. В выпадающем списке на листе ОФФЕР теперь все строки из SEGMENTS.', 'Оффер', 4);
+}
+
+function ensureSegmentsSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('SEGMENTS');
+  if (!sh) sh = ss.insertSheet('SEGMENTS');
+  if (sh.getLastRow() < 1) {
+    sh.getRange(1, 1, 1, SEGMENTS_HEADERS.length).setValues([SEGMENTS_HEADERS]).setFontWeight('bold').setBackground('#d9ead3');
+    sh.setFrozenRows(1);
+  }
+}
+
+function ensureOfferSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('ОФФЕР');
+  if (!sh) sh = ss.insertSheet('ОФФЕР');
+  for (var r = 1; r <= OFFER_LABELS.length; r++) {
+    sh.getRange(r, 1).setValue(OFFER_LABELS[r - 1]);
+  }
+  sh.getRange(1, 1, 11, 1).setFontWeight('bold');
+  sh.getRange(1, 1, 7, 1).setBackground('#e8f4fc');
+  sh.getRange(8, 1, 11, 1).setBackground('#fff2cc');
+  var segSh = ss.getSheetByName('SEGMENTS');
+  if (segSh && segSh.getLastRow() >= 2) {
+    try {
+      var range = segSh.getRange(2, 2, segSh.getLastRow(), 2);
+      var dv = SpreadsheetApp.newDataValidation().requireValueInRange(range).setAllowInvalid(false).build();
+      sh.getRange(1, 2).clearDataValidations().setDataValidation(dv);
+    } catch (e) {}
+  }
+  sh.setColumnWidth(1, 140);
+  sh.setColumnWidth(2, 320);
+  sh.getRange(13, 1).setValue('Оффер').setFontWeight('bold');
+  sh.getRange(13, 2).setWrap(true).setVerticalAlignment('top');
+}
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+  var sheet = e.range.getSheet();
+  var name = sheet.getName();
+  if ((name !== 'ОФФЕР' && name !== 'Оффер') || e.range.getRow() !== 1 || e.range.getColumn() !== 2) return;
+  pullSegmentToOffer_(e.source);
+}
+
+/** Подставляет характеристики выбранного в B1 сегмента в B2:B7. Вызывается из onEdit или из меню «Подставить сегмент». */
+function pullSegmentToOffer_(ss) {
+  var offerSh = ss.getSheetByName('ОФФЕР') || ss.getSheetByName('Оффер');
+  var segSh = ss.getSheetByName('SEGMENTS');
+  if (!offerSh || !segSh || segSh.getLastRow() < 2) return false;
+  var selectedName = offerSh.getRange(1, 2).getValue();
+  if (!selectedName) return false;
+  selectedName = String(selectedName).trim();
+  var data = segSh.getRange(2, 1, segSh.getLastRow(), 8).getValues();
+  for (var i = 0; i < data.length; i++) {
+    var rowName = String(data[i][1] || '').trim();
+    var rowCode = String(data[i][0] || '').trim();
+    if (rowName === selectedName || rowCode === selectedName) {
+      for (var c = 0; c < 6; c++) offerSh.getRange(2 + c, 2).setValue(data[i][2 + c] != null ? data[i][2 + c] : '');
+      return true;
+    }
+  }
+  return false;
+}
+
+function menuPullSegment() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ok = pullSegmentToOffer_(ss);
+  if (ok) {
+    ss.toast('Характеристики сегмента подставлены в B2:B7.', 'Оффер', 4);
+  } else {
+    ss.toast('В B1 выберите сегмент из выпадающего списка (или введите название из листа SEGMENTS) и нажмите снова.', 'Оффер', 5);
+  }
+}
+
+function generateOffer() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('ОФФЕР');
+  if (!sh) {
+    ss.toast('Сначала: Audience Analysis → Подготовить листы оффера.', 'Оффер', 4);
+    return;
+  }
+  var segment = sh.getRange(1, 2).getValue();
+  var pain = sh.getRange(2, 2).getValue();
+  var desire = sh.getRange(3, 2).getValue();
+  var fear = sh.getRange(4, 2).getValue();
+  var trigger = sh.getRange(5, 2).getValue();
+  var progress = sh.getRange(6, 2).getValue();
+  var restrain = sh.getRange(7, 2).getValue();
+  var action = sh.getRange(8, 2).getValue();
+  var special = sh.getRange(9, 2).getValue();
+  var guarantee = sh.getRange(10, 2).getValue();
+  var format = sh.getRange(11, 2).getValue();
+  var parts = [];
+  if (segment) parts.push('Сегмент: ' + segment);
+  if (pain) parts.push('Главная боль: ' + pain);
+  if (desire) parts.push('Желание: ' + desire);
+  if (fear) parts.push('Страх: ' + fear);
+  if (trigger) parts.push('Триггер: ' + trigger);
+  if (progress) parts.push('Силы прогресса: ' + progress);
+  if (restrain) parts.push('Силы сдерживания: ' + restrain);
+  if (action) parts.push('Акция: ' + action);
+  if (special) parts.push('Спецпредложение: ' + special);
+  if (guarantee) parts.push('Гарантия: ' + guarantee);
+  if (format) parts.push('Формат работы: ' + format);
+  var text = parts.length ? parts.join('\n\n') : 'Выберите сегмент и заполните поля.';
+  sh.getRange(13, 2).setValue(text);
+  ss.toast('Оффер сформирован в ячейке B13.', 'Оффер', 3);
+}
+
+function menuResetOffer() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.alert(
+    'Обнулить оффер',
+    'Всё сбросится: сегмент, поля и текст оффера. Не забудьте сохранить нужные данные перед сбросом.\n\nПродолжить?',
+    ui.ButtonSet.YES_NO
+  );
+  if (response === ui.Button.YES) resetOffer_();
+}
+
+function resetOffer_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('ОФФЕР');
+  if (!sh) return;
+  sh.getRange(1, 2, 13, 2).clearContent();
+  sh.getRange(13, 2).setValue('Выберите сегмент и заполните поля.');
+  SpreadsheetApp.getActiveSpreadsheet().toast('Оффер обнулён.', 'Оффер', 3);
 }
