@@ -34,26 +34,67 @@
   </style>
 </head>
 <body>
-  <h2>OpenRouter Settings</h2>
+  <h2>API: сервис и модель</h2>
 
-  <label for="apiKey">OpenRouter API Key</label>
-  <input type="password" id="apiKey" placeholder="sk-or-v1-..." autocomplete="off" />
-  <p class="hint">Ключ берётся на <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></p>
-
-  <label for="model">Model</label>
-  <select id="model">
-    <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
-    <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
-    <option value="openai/gpt-4o">openai/gpt-4o</option>
-    <option value="google/gemini-pro-1.5">google/gemini-pro-1.5</option>
-    <option value="google/gemini-2.0-flash">google/gemini-2.0-flash</option>
+  <label for="provider">Сервис</label>
+  <select id="provider">
+    <option value="OpenRouter">OpenRouter</option>
+    <option value="OpenAI">OpenAI</option>
+    <option value="Gemini">Google Gemini</option>
   </select>
+
+  <label for="apiKey">API ключ</label>
+  <input type="password" id="apiKey" placeholder="Вставьте ключ для выбранного сервиса" autocomplete="off" />
+  <p class="hint" id="keyHint">OpenRouter: <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></p>
+
+  <label for="model">Модель</label>
+  <select id="model"></select>
+  <p class="hint" id="modelHint">Оптимальная по цене и качеству</p>
 
   <button id="saveBtn">Save Settings</button>
   <p id="msg" class="msg" style="display:none;"></p>
 
   <script>
     (function() {
+      var MODELS = {
+        OpenRouter: [
+          { value: 'openai/gpt-4o-mini', label: 'gpt-4o-mini (оптимально)' },
+          { value: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet (баланс)' },
+          { value: 'openai/gpt-4o', label: 'GPT-4o (мощнее)' },
+          { value: 'anthropic/claude-3-opus', label: 'Claude 3 Opus (макс. качество)' }
+        ],
+        OpenAI: [
+          { value: 'gpt-4o-mini', label: 'gpt-4o-mini (оптимально)' },
+          { value: 'gpt-4o', label: 'gpt-4o (баланс)' },
+          { value: 'gpt-4-turbo', label: 'gpt-4-turbo (мощнее)' },
+          { value: 'o1-mini', label: 'o1-mini (макс. качество)' }
+        ],
+        Gemini: [
+          { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (оптимально)' },
+          { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro (баланс)' },
+          { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (мощнее)' },
+          { value: 'gemini-1.5-pro-002', label: 'Gemini 1.5 Pro 002 (макс. качество)' }
+        ]
+      };
+      var HINTS = {
+        OpenRouter: 'Ключ: <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>',
+        OpenAI: 'Ключ: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>',
+        Gemini: 'Ключ: <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio → API key</a>'
+      };
+
+      function fillModels() {
+        var prov = document.getElementById('provider').value;
+        var sel = document.getElementById('model');
+        sel.innerHTML = '';
+        (MODELS[prov] || MODELS.OpenRouter).forEach(function(m) {
+          var opt = document.createElement('option');
+          opt.value = m.value;
+          opt.textContent = m.label;
+          sel.appendChild(opt);
+        });
+        document.getElementById('keyHint').innerHTML = HINTS[prov] || HINTS.OpenRouter;
+      }
+
       var msgEl = document.getElementById('msg');
       function showMsg(text, isError) {
         msgEl.textContent = text || '';
@@ -61,31 +102,49 @@
         msgEl.className = 'msg ' + (isError ? 'err' : 'ok');
       }
 
-      // При открытии сайдбара подгружаем сохранённые значения
+      document.getElementById('provider').addEventListener('change', function() {
+        fillModels();
+        google.script.run.withSuccessHandler(function(data) {
+          var key = '';
+          var prov = document.getElementById('provider').value;
+          if (prov === 'OpenRouter' && data.openRouterKey) key = data.openRouterKey;
+          if (prov === 'OpenAI' && data.openAiKey) key = data.openAiKey;
+          if (prov === 'Gemini' && data.geminiKey) key = data.geminiKey;
+          document.getElementById('apiKey').value = key;
+        }).getStoredApiSettings();
+      });
+
       google.script.run
         .withSuccessHandler(function(data) {
-          if (data && data.apiKey) document.getElementById('apiKey').value = data.apiKey;
-          if (data && data.model) {
-            var sel = document.getElementById('model');
-            sel.value = data.model;
-            if (sel.value !== data.model) {
-              for (var i = 0; i < sel.options.length; i++) {
-                if (sel.options[i].value === data.model) { sel.selectedIndex = i; break; }
+          if (data.provider) {
+            var p = document.getElementById('provider');
+            p.value = data.provider;
+            fillModels();
+            if (data.model) {
+              var sel = document.getElementById('model');
+              sel.value = data.model;
+              if (sel.value !== data.model) {
+                for (var i = 0; i < sel.options.length; i++) {
+                  if (sel.options[i].value === data.model) { sel.selectedIndex = i; break; }
+                }
               }
             }
-          }
+          } else fillModels();
+          if (data.apiKey) document.getElementById('apiKey').value = data.apiKey;
         })
         .withFailureHandler(function(err) {
+          fillModels();
           var s = (err && err.message) ? err.message : String(err);
-          showMsg('Загрузка настроек: ' + s, true);
+          showMsg('Загрузка: ' + s, true);
         })
         .getStoredApiSettings();
 
       document.getElementById('saveBtn').addEventListener('click', function() {
         var apiKey = document.getElementById('apiKey').value.trim();
+        var provider = document.getElementById('provider').value;
         var model = document.getElementById('model').value;
         if (!apiKey) {
-          showMsg('Введите API ключ.', true);
+          showMsg('Введите API ключ для выбранного сервиса.', true);
           return;
         }
         var btn = document.getElementById('saveBtn');
@@ -98,10 +157,10 @@
           })
           .withFailureHandler(function(err) {
             var s = (err && err.message) ? err.message : String(err);
-            showMsg('Ошибка сохранения: ' + s + ' Добавьте в Code.gs функции getStoredApiSettings и saveApiSettings.', true);
+            showMsg('Ошибка: ' + s, true);
             btn.disabled = false;
           })
-          .saveApiSettings(apiKey, model);
+          .saveApiSettings(apiKey, provider, model);
       });
     })();
   </script>
